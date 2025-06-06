@@ -31,6 +31,16 @@ export async function POST(request: NextRequest) {
     const usedCodes = await prisma.activationCode.findMany({
       where: {
         isUsed: true
+      },
+      select: {
+        id: true,
+        code: true,
+        isUsed: true,
+        usedAt: true,
+        usedBy: true,
+        createdAt: true,
+        expiresAt: true,
+        validDays: true
       }
     })
     
@@ -112,8 +122,10 @@ export async function GET(request: NextRequest) {
       select: {
         id: true,
         code: true,
-        usedBy: true,
+        isUsed: true,
         usedAt: true,
+        usedBy: true,
+        createdAt: true,
         expiresAt: true,
         validDays: true
       }
