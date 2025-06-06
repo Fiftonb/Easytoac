@@ -9,7 +9,7 @@ async function testOneCodePerMachine() {
     
     // 测试该机器尝试使用一个新的激活码（应该被拒绝）
     console.log('1. 测试已激活机器尝试使用新激活码...')
-    const testCode = 'TEST12345678' // 一个不存在的激活码，用来测试逻辑
+    const testCode = '371C0FFB96F384' // 一个不存在的激活码，用来测试逻辑
     
     try {
         const response = await fetch(`${baseUrl}/api/verify`, {
@@ -38,7 +38,7 @@ async function testOneCodePerMachine() {
     console.log('\n2. 测试该机器使用已激活的激活码（应该成功）...')
     
     // 使用该机器已激活的激活码
-    const existingCode = '38E1E4B38C5E9969' // 该机器实际使用的激活码
+    const existingCode = '371C0FFB7A96F384' // 该机器实际使用的激活码
     
     try {
         const response = await fetch(`${baseUrl}/api/verify`, {
