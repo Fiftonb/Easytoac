@@ -22,7 +22,12 @@ export async function POST(request: NextRequest) {
 
     if (existingActivation) {
       const now = new Date()
-      const isExistingExpired = existingActivation.expiresAt && existingActivation.expiresAt < now
+      // 计算现有激活码的实际过期时间（从激活时开始计算）
+      let actualExpiresAt = null
+      if (existingActivation.usedAt && existingActivation.validDays) {
+        actualExpiresAt = new Date(existingActivation.usedAt.getTime() + existingActivation.validDays * 24 * 60 * 60 * 1000)
+      }
+      const isExistingExpired = actualExpiresAt && actualExpiresAt < now
 
       // 如果使用的是同一个激活码
       if (existingActivation.code === code) {
@@ -37,7 +42,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({
           success: true,
           message: '激活码验证成功（重复验证）',
-          expires_at: existingActivation.expiresAt
+          expires_at: actualExpiresAt
         })
       } else {
         // 如果使用的是不同激活码
@@ -67,13 +72,13 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // 检查是否过期
-    if (activationCode.expiresAt && activationCode.expiresAt < new Date()) {
-      return NextResponse.json(
-        { success: false, message: '激活码已过期' },
-        { status: 400 }
-      )
-    }
+    // 检查是否过期（对于未使用的激活码，不检查过期，因为过期时间从激活开始计算）
+    // if (activationCode.expiresAt && activationCode.expiresAt < new Date()) {
+    //   return NextResponse.json(
+    //     { success: false, message: '激活码已过期' },
+    //     { status: 400 }
+    //   )
+    // }
 
     // 检查是否已被其他设备使用
     if (activationCode.isUsed) {
@@ -83,20 +88,26 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // 首次使用，更新激活码状态
+    // 首次使用，更新激活码状态并设置过期时间
+    const now = new Date()
+    const expiresAt = activationCode.validDays 
+      ? new Date(now.getTime() + activationCode.validDays * 24 * 60 * 60 * 1000)
+      : null
+
     await prisma.activationCode.update({
       where: { code },
       data: {
         isUsed: true,
-        usedAt: new Date(),
-        usedBy: machine_id
+        usedAt: now,
+        usedBy: machine_id,
+        expiresAt: expiresAt  // 设置从激活时开始计算的过期时间
       }
     })
 
     return NextResponse.json({
       success: true,
       message: '激活码验证成功',
-      expires_at: activationCode.expiresAt
+      expires_at: expiresAt
     })
 
   } catch (error) {

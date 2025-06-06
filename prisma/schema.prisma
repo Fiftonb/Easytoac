@@ -18,6 +18,8 @@ model ActivationCode {
   usedBy    String?   // 机器ID
   createdAt DateTime  @default(now())
   expiresAt DateTime?
+  validDays Int?      // 激活码有效天数，从激活时开始计算
+  cardType  String?   // 套餐类型：如"周卡"、"月卡"、"季卡"、"年卡"等
 
   @@map("activation_codes")
 }

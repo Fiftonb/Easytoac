@@ -15,7 +15,7 @@ export async function POST(request: NextRequest) {
       return createAuthResponse(authResult.error || '认证失败', 401)
     }
 
-    const { amount, expiryDays } = await request.json()
+    const { amount, expiryDays, cardType } = await request.json()
 
     if (!amount || amount < 1 || amount > 100) {
       return NextResponse.json(
@@ -25,9 +25,10 @@ export async function POST(request: NextRequest) {
     }
 
     const codes = []
-    const expiresAt = expiryDays 
-      ? new Date(Date.now() + expiryDays * 24 * 60 * 60 * 1000)
-      : null
+    // 不再预设过期时间，而是存储有效天数，从激活时开始计算
+    // const expiresAt = expiryDays 
+    //   ? new Date(Date.now() + expiryDays * 24 * 60 * 60 * 1000)
+    //   : null
 
     for (let i = 0; i < amount; i++) {
       let code: string
@@ -45,13 +46,17 @@ export async function POST(request: NextRequest) {
       const activationCode = await prisma.activationCode.create({
         data: {
           code: code!,
-          expiresAt
+          validDays: expiryDays || null,  // 存储有效天数，从激活时开始计算
+          cardType: cardType || null,     // 存储套餐类型
+          expiresAt: null  // 初始时不设置过期时间
         }
       })
 
       codes.push({
         id: activationCode.id,
         code: activationCode.code,
+        validDays: activationCode.validDays,
+        cardType: activationCode.cardType,
         expiresAt: activationCode.expiresAt,
         createdAt: activationCode.createdAt
       })
@@ -59,7 +64,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      message: `成功生成 ${amount} 个激活码`,
+      message: `成功生成 ${amount} 个${cardType ? cardType : ''}激活码`,
       codes
     })
 

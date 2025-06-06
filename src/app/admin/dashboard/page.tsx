@@ -12,6 +12,8 @@ interface ActivationCode {
   usedBy: string | null
   createdAt: string
   expiresAt: string | null
+  validDays: number | null
+  cardType: string | null
 }
 
 // 定义统计数据接口
@@ -22,12 +24,21 @@ interface Stats {
   active: number
 }
 
+// 定义套餐类型
+interface CardType {
+  name: string
+  days: number
+  description: string
+}
+
 type TabType = 'generate' | 'list' | 'stats' | 'changePassword' | 'systemConfig'
 
 export default function DashboardPage() {
   const [activeTab, setActiveTab] = useState<TabType>('stats')
   const [amount, setAmount] = useState(1)
   const [expiryDays, setExpiryDays] = useState(30)
+  const [selectedCardType, setSelectedCardType] = useState<string>('')
+  const [customDays, setCustomDays] = useState(30)
   const [loading, setLoading] = useState(false)
   const [generatedCodes, setGeneratedCodes] = useState<ActivationCode[]>([])
   const [allCodes, setAllCodes] = useState<ActivationCode[]>([])
@@ -36,6 +47,7 @@ export default function DashboardPage() {
   const [messageType, setMessageType] = useState<'success' | 'error'>('success')
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState<'all' | 'unused' | 'used' | 'expired'>('all')
+  const [cardTypeFilter, setCardTypeFilter] = useState<'all' | string>('all')
   const [currentPage, setCurrentPage] = useState(1)
   const [itemsPerPage] = useState(10)
   const [currentPassword, setCurrentPassword] = useState('')
@@ -43,6 +55,35 @@ export default function DashboardPage() {
   const [confirmPassword, setConfirmPassword] = useState('')
   const [systemConfigs, setSystemConfigs] = useState<any[]>([])
   const router = useRouter()
+
+  // 预设套餐类型
+  const cardTypes: CardType[] = [
+    { name: '周卡', days: 7, description: '7天有效期' },
+    { name: '月卡', days: 30, description: '30天有效期' },
+    { name: '季卡', days: 90, description: '90天有效期' },
+    { name: '半年卡', days: 180, description: '180天有效期' },
+    { name: '年卡', days: 365, description: '365天有效期' },
+    { name: '自定义', days: 0, description: '自定义天数' }
+  ]
+
+  // 计算实际过期时间的辅助函数
+  const getActualExpiresAt = (code: ActivationCode): Date | null => {
+    if (code.usedAt && code.validDays) {
+      // 从激活时开始计算过期时间
+      return new Date(new Date(code.usedAt).getTime() + code.validDays * 24 * 60 * 60 * 1000)
+    }
+    // 兼容旧数据
+    return code.expiresAt ? new Date(code.expiresAt) : null
+  }
+
+  // 处理套餐类型选择
+  const handleCardTypeChange = (cardType: string) => {
+    setSelectedCardType(cardType)
+    const selectedCard = cardTypes.find(card => card.name === cardType)
+    if (selectedCard && selectedCard.days > 0) {
+      setExpiryDays(selectedCard.days)
+    }
+  }
 
   // 获取统计数据
   const fetchStats = async () => {
@@ -277,25 +318,31 @@ export default function DashboardPage() {
 
   const handleGenerateCodes = async (e: React.FormEvent) => {
     e.preventDefault()
-    setLoading(true)
-    setMessage('')
+    if (loading) return
 
     try {
+      setLoading(true)
+      const finalExpiryDays = selectedCardType === '自定义' ? customDays : expiryDays
+      const finalCardType = selectedCardType || null
+
       const response = await fetch('/api/admin/codes/generate', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ amount, expiryDays }),
+        body: JSON.stringify({ 
+          amount, 
+          expiryDays: finalExpiryDays,
+          cardType: finalCardType
+        }),
       })
 
       const data = await response.json()
-
       if (data.success) {
         setGeneratedCodes(data.codes)
         setMessage(data.message)
         setMessageType('success')
-        fetchStats() // 更新统计数据
+        fetchStats()
       } else {
         setMessage(data.message || '生成失败')
         setMessageType('error')
@@ -316,10 +363,28 @@ export default function DashboardPage() {
 
   const exportCodes = (codes: ActivationCode[]) => {
     const csvContent = "data:text/csv;charset=utf-8," 
-      + "激活码,状态,创建时间,过期时间,使用时间,使用者\n"
-      + codes.map(code => 
-          `${code.code},${code.isUsed ? '已使用' : '未使用'},${new Date(code.createdAt).toLocaleString()},${code.expiresAt ? new Date(code.expiresAt).toLocaleString() : '无限期'},${code.usedAt ? new Date(code.usedAt).toLocaleString() : ''},${code.usedBy || ''}`
-        ).join("\n")
+      + "激活码,套餐类型,状态,创建时间,过期时间,使用时间,使用者\n"
+      + codes.map(code => {
+          let status = '未激活'
+          let expiresDisplay = '激活后生效'
+          
+          const actualExpiresAt = getActualExpiresAt(code)
+          const isExpired = actualExpiresAt ? actualExpiresAt < new Date() : false
+          
+          if (isExpired) {
+            status = '已过期'
+            expiresDisplay = actualExpiresAt ? actualExpiresAt.toLocaleString() : '无限期'
+          } else if (code.isUsed) {
+            status = '已使用'
+            expiresDisplay = actualExpiresAt ? actualExpiresAt.toLocaleString() : '无限期'
+          } else if (!code.validDays) {
+            expiresDisplay = '无限期'
+          }
+          
+          const cardTypeDisplay = getCardTypeDisplay(code)
+          
+          return `${code.code},${cardTypeDisplay},${status},${new Date(code.createdAt).toLocaleString()},${expiresDisplay},${code.usedAt ? new Date(code.usedAt).toLocaleString() : ''},${code.usedBy || ''}`
+        }).join("\n")
     
     const encodedUri = encodeURI(csvContent)
     const link = document.createElement("a")
@@ -336,7 +401,8 @@ export default function DashboardPage() {
                          (code.usedBy && code.usedBy.toLowerCase().includes(searchTerm.toLowerCase()))
     
     const now = new Date()
-    const isExpired = code.expiresAt ? new Date(code.expiresAt) < now : false
+    const actualExpiresAt = getActualExpiresAt(code)
+    const isExpired = actualExpiresAt ? actualExpiresAt < now : false
     
     let matchesStatus = true
     switch (statusFilter) {
@@ -344,14 +410,23 @@ export default function DashboardPage() {
         matchesStatus = !code.isUsed && !isExpired
         break
       case 'used':
-        matchesStatus = code.isUsed
+        matchesStatus = code.isUsed && !isExpired
         break
       case 'expired':
-        matchesStatus = isExpired && !code.isUsed
+        matchesStatus = isExpired
         break
     }
     
-    return matchesSearch && matchesStatus
+    let matchesCardType = true
+    if (cardTypeFilter !== 'all') {
+      if (cardTypeFilter === 'none') {
+        matchesCardType = !code.cardType
+      } else {
+        matchesCardType = code.cardType === cardTypeFilter
+      }
+    }
+    
+    return matchesSearch && matchesStatus && matchesCardType
   })
 
   // 分页逻辑
@@ -363,15 +438,38 @@ export default function DashboardPage() {
 
   const getStatusBadge = (code: ActivationCode) => {
     const now = new Date()
-    const isExpired = code.expiresAt ? new Date(code.expiresAt) < now : false
+    const actualExpiresAt = getActualExpiresAt(code)
+    const isExpired = actualExpiresAt ? actualExpiresAt < now : false
 
-    if (code.isUsed) {
-      return <span className="px-2 py-1 text-xs rounded-full bg-green-100 text-green-800">已使用</span>
-    } else if (isExpired) {
+    if (isExpired) {
       return <span className="px-2 py-1 text-xs rounded-full bg-red-100 text-red-800">已过期</span>
+    } else if (code.isUsed) {
+      return <span className="px-2 py-1 text-xs rounded-full bg-green-100 text-green-800">已使用</span>
     } else {
-      return <span className="px-2 py-1 text-xs rounded-full bg-blue-100 text-blue-800">可用</span>
+      return <span className="px-2 py-1 text-xs rounded-full bg-blue-100 text-blue-800">未激活</span>
     }
+  }
+
+  // 获取套餐类型显示
+  const getCardTypeDisplay = (code: ActivationCode) => {
+    if (code.cardType) {
+      return code.cardType
+    } else if (code.validDays) {
+      return `${code.validDays}天`
+    } else {
+      return '无限期'
+    }
+  }
+
+  // 获取可用的套餐类型列表
+  const getAvailableCardTypes = () => {
+    const types = new Set<string>()
+    allCodes.forEach(code => {
+      if (code.cardType) {
+        types.add(code.cardType)
+      }
+    })
+    return Array.from(types).sort()
   }
 
   return (
@@ -601,46 +699,84 @@ export default function DashboardPage() {
             <div className="bg-white rounded-lg shadow-lg p-6">
               <h2 className="text-xl font-semibold mb-4 text-gray-800">生成激活码</h2>
               
-              <form onSubmit={handleGenerateCodes} className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div>
-                  <label htmlFor="amount" className="block text-sm font-medium text-gray-700 mb-2">
-                    生成数量
-                  </label>
-                  <input
-                    type="number"
-                    id="amount"
-                    min="1"
-                    max="100"
-                    value={amount}
-                    onChange={(e) => setAmount(parseInt(e.target.value))}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-                    required
-                  />
+              <form onSubmit={handleGenerateCodes} className="space-y-4">
+                {/* 第一行：生成数量和套餐类型 */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label htmlFor="amount" className="block text-sm font-medium text-gray-700 mb-2">
+                      生成数量
+                    </label>
+                    <input
+                      type="number"
+                      id="amount"
+                      min="1"
+                      max="100"
+                      value={amount}
+                      onChange={(e) => setAmount(parseInt(e.target.value))}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                      required
+                    />
+                  </div>
+                  
+                  <div>
+                    <label htmlFor="cardType" className="block text-sm font-medium text-gray-700 mb-2">
+                      套餐类型
+                    </label>
+                    <select
+                      id="cardType"
+                      value={selectedCardType}
+                      onChange={(e) => handleCardTypeChange(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                    >
+                      <option value="">请选择套餐类型</option>
+                      {cardTypes.map((cardType) => (
+                        <option key={cardType.name} value={cardType.name}>
+                          {cardType.name} ({cardType.description})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
-                
-                <div>
-                  <label htmlFor="expiryDays" className="block text-sm font-medium text-gray-700 mb-2">
-                    有效期（天）
-                  </label>
-                  <input
-                    type="number"
-                    id="expiryDays"
-                    min="1"
-                    value={expiryDays}
-                    onChange={(e) => setExpiryDays(parseInt(e.target.value))}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-                    required
-                  />
-                </div>
-                
-                <div className="flex items-end">
-                  <button
-                    type="submit"
-                    disabled={loading}
-                    className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded disabled:opacity-50"
-                  >
-                    {loading ? '生成中...' : '生成激活码'}
-                  </button>
+
+                {/* 第二行：有效期设置 */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label htmlFor="expiryDays" className="block text-sm font-medium text-gray-700 mb-2">
+                      有效期（天）
+                    </label>
+                    <input
+                      type="number"
+                      id="expiryDays"
+                      min="1"
+                      value={selectedCardType === '自定义' ? customDays : expiryDays}
+                      onChange={(e) => {
+                        const value = parseInt(e.target.value)
+                        if (selectedCardType === '自定义') {
+                          setCustomDays(value)
+                        } else {
+                          setExpiryDays(value)
+                        }
+                      }}
+                      disabled={selectedCardType !== '自定义' && selectedCardType !== ''}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100"
+                      required
+                    />
+                    {selectedCardType && selectedCardType !== '自定义' && (
+                      <p className="text-sm text-gray-500 mt-1">
+                        已选择{selectedCardType}，有效期自动设置为 {expiryDays} 天
+                      </p>
+                    )}
+                  </div>
+                  
+                  <div className="flex items-end">
+                    <button
+                      type="submit"
+                      disabled={loading}
+                      className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded disabled:opacity-50"
+                    >
+                      {loading ? '生成中...' : `生成${selectedCardType ? selectedCardType : ''}激活码`}
+                    </button>
+                  </div>
                 </div>
               </form>
             </div>
@@ -666,10 +802,13 @@ export default function DashboardPage() {
                           激活码
                         </th>
                         <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          套餐类型
+                        </th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                           创建时间
                         </th>
                         <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          过期时间
+                          有效期
                         </th>
                         <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                           操作
@@ -683,10 +822,13 @@ export default function DashboardPage() {
                             {code.code}
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            {getCardTypeDisplay(code)}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                             {new Date(code.createdAt).toLocaleString()}
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                            {code.expiresAt ? new Date(code.expiresAt).toLocaleString() : '无限期'}
+                            {code.validDays ? `${code.validDays}天（激活后生效）` : '无限期'}
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                             <button
@@ -711,7 +853,7 @@ export default function DashboardPage() {
           <div className="space-y-6">
             {/* 搜索和筛选 */}
             <div className="bg-white rounded-lg shadow-lg p-6">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                 <div>
                   <label htmlFor="search" className="block text-sm font-medium text-gray-700 mb-2">
                     搜索激活码或机器ID
@@ -726,20 +868,40 @@ export default function DashboardPage() {
                   />
                 </div>
                 
-                                 <div>
-                   <label htmlFor="status" className="block text-sm font-medium text-gray-700 mb-2">
-                     状态筛选
-                   </label>
-                   <select
-                     id="status"
-                     value={statusFilter}
-                     onChange={(e) => setStatusFilter(e.target.value as 'all' | 'unused' | 'used' | 'expired')}
-                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-                   >
-                    <option value="all">全部</option>
-                    <option value="unused">未使用</option>
+                <div>
+                  <label htmlFor="status" className="block text-sm font-medium text-gray-700 mb-2">
+                    状态筛选
+                  </label>
+                  <select
+                    id="status"
+                    value={statusFilter}
+                    onChange={(e) => setStatusFilter(e.target.value as 'all' | 'unused' | 'used' | 'expired')}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                  >
+                    <option value="all">全部状态</option>
+                    <option value="unused">未激活</option>
                     <option value="used">已使用</option>
                     <option value="expired">已过期</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label htmlFor="cardTypeFilter" className="block text-sm font-medium text-gray-700 mb-2">
+                    套餐类型
+                  </label>
+                  <select
+                    id="cardTypeFilter"
+                    value={cardTypeFilter}
+                    onChange={(e) => setCardTypeFilter(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                  >
+                    <option value="all">全部套餐</option>
+                    {getAvailableCardTypes().map((cardType) => (
+                      <option key={cardType} value={cardType}>
+                        {cardType}
+                      </option>
+                    ))}
+                    <option value="none">无套餐类型</option>
                   </select>
                 </div>
                 
@@ -754,21 +916,21 @@ export default function DashboardPage() {
               </div>
             </div>
 
-                         {/* 激活码列表 */}
-             <div className="bg-white rounded-lg shadow-lg p-6">
-               <div className="flex justify-between items-center mb-4">
-                 <h2 className="text-xl font-semibold text-gray-800">
-                   激活码列表 ({filteredCodes.length} 条记录)
-                 </h2>
-                 <button
-                   onClick={handleCleanupExpired}
-                   disabled={loading}
-                   className="bg-orange-600 hover:bg-orange-700 text-white font-bold py-2 px-4 rounded disabled:opacity-50"
-                   title="清理过期激活码的绑定关系，允许绑定过期码的机器使用新激活码"
-                 >
-                   清理过期绑定
-                 </button>
-               </div>
+            {/* 激活码列表 */}
+            <div className="bg-white rounded-lg shadow-lg p-6">
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="text-xl font-semibold text-gray-800">
+                  激活码列表 ({filteredCodes.length} 条记录)
+                </h2>
+                <button
+                  onClick={handleCleanupExpired}
+                  disabled={loading}
+                  className="bg-orange-600 hover:bg-orange-700 text-white font-bold py-2 px-4 rounded disabled:opacity-50"
+                  title="清理过期激活码的绑定关系，允许绑定过期码的机器使用新激活码"
+                >
+                  清理过期绑定
+                </button>
+              </div>
               
               {loading ? (
                 <div className="text-center py-8">
@@ -786,6 +948,9 @@ export default function DashboardPage() {
                           </th>
                           <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                             状态
+                          </th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            套餐类型
                           </th>
                           <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                             创建时间
@@ -814,10 +979,19 @@ export default function DashboardPage() {
                               {getStatusBadge(code)}
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                              {getCardTypeDisplay(code)}
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                               {new Date(code.createdAt).toLocaleString()}
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                              {code.expiresAt ? new Date(code.expiresAt).toLocaleString() : '无限期'}
+                              {(() => {
+                                if (!code.isUsed) {
+                                  return code.validDays ? '激活后生效' : '无限期'
+                                }
+                                const actualExpiresAt = getActualExpiresAt(code)
+                                return actualExpiresAt ? actualExpiresAt.toLocaleString() : '无限期'
+                              })()}
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                               {code.usedAt ? new Date(code.usedAt).toLocaleString() : '-'}

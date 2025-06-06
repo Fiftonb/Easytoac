@@ -2,6 +2,18 @@ import { NextRequest, NextResponse } from 'next/server'
 import { verifyAuth, createAuthResponse } from '@/lib/auth-middleware'
 import { prisma } from '@/lib/db'
 
+// 定义激活码类型
+interface ActivationCodeData {
+  id: number
+  code: string
+  isUsed: boolean
+  usedAt: Date | null
+  usedBy: string | null
+  createdAt: Date
+  expiresAt: Date | null
+  validDays: number | null
+}
+
 export async function POST(request: NextRequest) {
   try {
     // 使用认证中间件验证
@@ -15,14 +27,24 @@ export async function POST(request: NextRequest) {
     
     const now = new Date()
     
-    // 查找所有过期且已使用的激活码
-    const expiredCodes = await prisma.activationCode.findMany({
+    // 查找所有已使用的激活码
+    const usedCodes = await prisma.activationCode.findMany({
       where: {
-        isUsed: true,
-        expiresAt: {
-          lt: now // 过期时间小于当前时间
-        }
+        isUsed: true
       }
+    })
+    
+    // 筛选出真正过期的激活码
+    const expiredCodes = usedCodes.filter((code: ActivationCodeData) => {
+      if (code.usedAt && code.validDays) {
+        // 从激活时开始计算过期时间
+        const actualExpiresAt = new Date(code.usedAt.getTime() + code.validDays * 24 * 60 * 60 * 1000)
+        return actualExpiresAt < now
+      } else if (code.expiresAt) {
+        // 兼容旧数据
+        return code.expiresAt < now
+      }
+      return false
     })
     
     if (expiredCodes.length === 0) {
@@ -34,17 +56,18 @@ export async function POST(request: NextRequest) {
     }
     
     // 重置过期激活码的使用状态
+    const expiredCodeIds = expiredCodes.map((code: ActivationCodeData) => code.id)
     const result = await prisma.activationCode.updateMany({
       where: {
-        isUsed: true,
-        expiresAt: {
-          lt: now
+        id: {
+          in: expiredCodeIds
         }
       },
       data: {
         isUsed: false,
         usedAt: null,
-        usedBy: null
+        usedBy: null,
+        expiresAt: null  // 清空过期时间，等待下次激活时重新设置
       }
     })
     
@@ -54,7 +77,7 @@ export async function POST(request: NextRequest) {
       success: true,
       message: `成功清理了 ${result.count} 个过期激活码的绑定关系`,
       cleaned: result.count,
-      expiredCodes: expiredCodes.map((code: any) => ({
+      expiredCodes: expiredCodes.map((code: ActivationCodeData) => ({
         code: code.code,
         usedBy: code.usedBy,
         expiresAt: code.expiresAt
@@ -81,21 +104,32 @@ export async function GET(request: NextRequest) {
 
     const now = new Date()
     
-    // 查找所有过期且已使用的激活码
-    const expiredCodes = await prisma.activationCode.findMany({
+    // 查找所有已使用的激活码
+    const usedCodes = await prisma.activationCode.findMany({
       where: {
-        isUsed: true,
-        expiresAt: {
-          lt: now
-        }
+        isUsed: true
       },
       select: {
         id: true,
         code: true,
         usedBy: true,
         usedAt: true,
-        expiresAt: true
+        expiresAt: true,
+        validDays: true
       }
+    })
+    
+    // 筛选出真正过期的激活码
+    const expiredCodes = usedCodes.filter((code: ActivationCodeData) => {
+      if (code.usedAt && code.validDays) {
+        // 从激活时开始计算过期时间
+        const actualExpiresAt = new Date(code.usedAt.getTime() + code.validDays * 24 * 60 * 60 * 1000)
+        return actualExpiresAt < now
+      } else if (code.expiresAt) {
+        // 兼容旧数据
+        return code.expiresAt < now
+      }
+      return false
     })
     
     return NextResponse.json({
